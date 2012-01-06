@@ -1,0 +1,7 @@
+SUSE Studio V2 API client library implementation
+------------------------------------------------
+
+Originally this was loosely based on the V1 Python library client implementation.
+
+However, basically the whole code base and use of classes has changed.
+
