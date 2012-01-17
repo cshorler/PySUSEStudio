@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
 """
-TODO: Example usage
+This module works with XML - internally it uses etree, if lxml.etree is
+available, that is used - otherwise xml.etree.ElementTree is used.
 
+Basic Usage:
 import studioapi
 
 connection = studioapi.AuthConnection(username, password)
@@ -16,9 +18,21 @@ __license__ = 'GPL v.2 http://www.gnu.org/licenses/gpl.txt'
 __author__ = "Chris Horler <cshorler@googlemail.com>"
 __version__ = '1.0-pre1'
 
+import sys
 import urllib
 import urllib2
 import urlparse
+from contextlib import closing
+
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
+try:
+    import lxml.etree as ET
+except ImportError:
+    import xml.etree.ElementTree as ET
 
 
 class HTTPPutRequest(urllib2.Request):
@@ -76,6 +90,14 @@ class AuthConnection(BaseConnection):
              urllib2.HTTPHandler(debuglevel=1), auth_handler)
 
 
+class StudioError(Exception):
+    """Internal Library Error
+    """
+    def __init__(self, *args):
+        Exception.__init__(self, *args)
+        self.wrapped_exc = sys.exc_info()
+        
+        
 class StudioAPI:
     """SUSE Studio REST API client implementation
     """
@@ -85,28 +107,42 @@ class StudioAPI:
         self.api_addr = studio_connection.api_addr()
         urllib2.install_opener(self.opener)
 
+    def _opener(self, request, raw=False):
+        with closing(urllib2.urlopen(request)) as response:
+            try:
+                if raw:
+                    return response.read()
+                else:
+                    return ET.parse(response).getroot()
+            except urllib2.HTTPError, e:
+                if e.code in [500,]: # TODO: list of HTTP Errors to wrap
+                    raise StudioError, "report error to the library maintainer"
+                else:
+                    raise
+                
     ###############################################################
     # GENERAL INFORMATION
-    ################################################################
-    def get_api_key(self):
+    ###############################################################
+    def _get_api_key(self):
         """GET /user/show_api_key
 
-            Returns an HTML page which contains the API key flagged as:
-
-            <span class="studio:api_key">ksdjfu93r</span>
+        Not 100% sure on the usefulness of this function, so it's _private
+        
+        Returns an HTML page which contains the API key flagged as:
         """
         url_parts = urlparse.urlsplit(self.api_addr)
         url = urlparse.urlunsplit(url_parts._replace(path='/user/show_api_key'))
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req, raw=True)
 
     def get_account(self):
         """GET /api/v1/user/account
 
-             Returns information about the account, such as username, email address and disk quota.
+        Returns information about the account, such as username, email address
+        and disk quota.
         """
         req = HTTPGetRequest(self.api_addr+'/user/account')
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_api_version(self):
         """GET /api/v1/user/api_version
@@ -114,7 +150,7 @@ class StudioAPI:
             Returns the running API version including the minor version.
         """
         req = HTTPGetRequest(self.api_addr+'/user/api_version')
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     ############################################################
     # Template sets
@@ -135,9 +171,12 @@ class StudioAPI:
 
                 name - Name of template
         """
-        query = urllib.urlencode({'name':name})
-        req = HTTPGetRequest(self.api_addr + '/user/template_sets/?%s' % query)
-        return urllib2.urlopen(req)
+        if name:
+            url = self.api_addr + '/user/template_sets/%s' % name
+        else:
+            url = self.api_addr + '/user/template_sets'
+        req = HTTPGetRequest(url)
+        return self._opener(req)
 
     ############################################################
     # Appliances
@@ -145,11 +184,11 @@ class StudioAPI:
     def get_appliances(self):
         """GET /api/v1/user/appliances
 
-            List all appliances of the current user.
+        List all appliances of the current user.
         """
         url = self.api_addr+'/user/appliances'
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_appliance_status(self, id):
         """GET /api/v1/user/appliances/<id>/status
@@ -157,42 +196,43 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/appliances/%s/status' % id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def create_appliance(self, clone_from, name='', arch=''):
-        """POST /api/v1/user/appliances?clone_from=<appliance_id>&name=<name>&arch=<arch>
+        """POST /api/v1/user/appliances?clone_from=<appliance_id>&name=<name>
+        &arch=<arch>
 
-            Arguments:
+        Arguments:
 
-                clone_from - The template the new appliance should be based on.
-                name (optional) - The name of appliance
-                arch (optional) - The architecture of the appliance
-                                  (x86_64 or i686)
+            clone_from - The template the new appliance should be based on.
+            name (optional) - The name of appliance
+            arch (optional) - The architecture of the appliance
+                              (x86_64 or i686)
 
-            Create a new appliance by cloning a template or another appliance
-            with the id appliance_id.
+        Create a new appliance by cloning a template or another appliance with
+        the id appliance_id.
 
-            If name is left out, a name will be generated. If arch is left out a
-            i686 appliance will be created.
+        If name is left out, a name will be generated. If arch is left out a
+        i686 appliance will be created.
         """
         url = self.api_addr+'/user/appliances'
         data = urllib.urlencode({'clone_from':clone_from, 'name':name,
                                  'arch':arch})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def delete_appliance(self, id):
         """DELETE /api/v1/user/appliances/<id>
 
-            Arguments:
+        Arguments:
 
-                id - Id of the appliance
+            id - Id of the appliance
 
-            Delete appliance with id id.
+        Delete appliance with id id.
         """
         url = self.api_addr+'/user/appliances/%s' % id
         req = HTTPDeleteRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     ##################################################################
     # Repositories
@@ -208,46 +248,44 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/appliances/%s/repositories' % id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
-    def add_appliance_repositories(self, id, xml_string=None, xml_file=None):
-        """PUT /api/v1/user/appliances/<id>/repositories
+    def _set_appliance_repositories(self, appliance_id, xml_root=None):
+        """PUT /api/v1/user/appliances/<appliance_id>/repositories
+
+        THIS FUNCTION IS DESTRUCTIVE - it replaces the current repositories
+        usually you want add_appliance_repository, or
+        add_appliance_user_repository and not this function
 
             Arguments:
 
-                id - Id of the appliance
-                xml_string - repositories xml to upload
-                xml_file - file object for xml repositories
-
-            Update the list of repositories of the appliance with id id.
-
-            Note: Only the repository ids of the put xml are considered.
+                appliance_id - id of the appliance
+                xml_root - root node of repositories xml (ET.Element)
         """
-        if xml_string and xml_file:
-            raise ValueError, "only use one of xml_string or xml_file, not both"
+        if isinstance(xml_root, ET.Element):
+            xml_string = ET.tostring(xml_root)
+        else:
+            raise ValueError, "expecting ET.Element (e.g. xml.etree.Element)"
 
-        if xml_file:
-            xml_string = xml_file.read()
-
-        url = self.api_addr+'/user/appliances/%s/repositories' % id
+        url = self.api_addr+'/user/appliances/%s/repositories' % appliance_id
         req = HTTPPutRequest(url=url, data=xml_string,
             headers={'Content-Type': 'application/xml'})
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
-    def add_appliance_repository(self, id, repo_id):
-        """POST /api/v1/user/appliances/<id>/cmd/add_repository?repo_id=<repo_id>
+    def add_appliance_repository(self, appliance_id, repo_id):
+        """POST /api/v1/user/appliances/<appliance_id>/cmd/add_repository?repo_id=<repo_id>
 
             Arguments:
 
-                id - Id of the appliance
-                repo_id - Id of the repository.
+                appliance_id - id of the appliance
+                repo_id - id of the repository.
 
-            Add the specified repository to the appliance with id id.
+            Add the specified repository to the appliance with id appliance_id.
         """
-        url = self.api_addr+'/user/appliances/%s/cmd/add_repository' % id
+        url = self.api_addr+'/user/appliances/%s/cmd/add_repository' % appliance_id
         data = urllib.urlencode({"repo_id":repo_id})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def remove_appliance_repository(self, id, repo_id):
         """POST /api/v1/user/appliances/<id>/cmd/remove_repository?repo_id=<repo_id>
@@ -262,7 +300,7 @@ class StudioAPI:
         url = self.api_addr+'/user/appliances/%s/cmd/remove_repository' % id
         data = urllib.urlencode({'repo_id':repo_id})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def add_appliance_user_repository(self, id):
         """POST /api/v1/user/appliances/<id>/cmd/add_user_repository
@@ -271,15 +309,16 @@ class StudioAPI:
 
                 id - Id of the appliance
 
-            Adds the according user repository (the one containing the uploaded RPMs) to the appliance.
+            Adds the according user repository (the one containing the uploaded
+            RPMs) to the appliance.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/add_user_repository' % id
         req = HTTPPostRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
-    ##############################################################################
+    ###########################################################################
     # Software
-    ##############################################################################
+    ###########################################################################
     def get_appliance_software(self, id):
         """GET /api/v1/user/appliances/<id>/software
 
@@ -291,49 +330,51 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/appliances/%s/software' % id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
-    def set_appliance_software(self, id, xml_string=None, xml_file=None):
-        """PUT /api/v1/user/appliances/<id>/software
+    def set_appliance_software(self, appliance_id, xml_root=None):
+        """PUT /api/v1/user/appliances/<appliance_id>/software
 
             Arguments:
 
-                id - Id of the appliance
+                appliance_id - id of the appliance
+                xml_root - root node of repositories xml (ET.Element)
 
-            Update the list of selected packages and patterns of the appliance with id id.
+            Update the list of selected packages and patterns of the appliance
+            with id id.
         """
-        if xml_string and xml_file:
-            raise ValueError, "only use one of xml_string or xml_file, not both"
+        if isinstance(xml_root, ET.Element):
+            xml_string = ET.tostring(xml_root)
+        else:
+            raise ValueError, "expecting ET.Element (e.g. xml.etree.Element)"
 
-        if xml_file:
-            xml_string = xml_file.read()
-
-        url = self.api_addr+'/user/appliances/%s/software' % id
+        url = self.api_addr+'/user/appliances/%s/software' % appliance_id
         req = HTTPPutRequest(url, data=xml_string,
             headers={'Content-Type': 'application/xml'})
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_appliance_installed_software(self, id, build_id=''):
         """GET /api/v1/user/appliances/<id>/software/installed?build_id=<build>
 
-            Arguments:
+        Arguments:
 
-                id - Id of the appliance
-                build_id (optional) - Id of the build.
+            id - Id of the appliance
+            build_id (optional) - Id of the build.
 
-            List all packages and patterns that are installed. You can either
-            specify the appliance with the appliance_id parameter, which will
-            list the software that will installed with the next build or via an
-            build id. That makes it possible to retrieve the installed software
-            for older builds.
+        List all packages and patterns that are installed. You can either
+        specify the appliance with the appliance_id parameter, which will
+        list the software that will installed with the next build or via an
+        build id. That makes it possible to retrieve the installed software
+        for older builds.
         """
         query = urllib.urlencode({'buildid':build_id})
         url = self.api_addr+'/user/appliances/%s/installed?%s' % (id, query)
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def add_appliance_software_package(self, id, name, version='', repository_id=''):
-        """POST /api/v1/user/appliances/<id>/cmd/add_package?name=<name>&version=<version>&repository_id=<repo_id>
+        """POST /api/v1/user/appliances/<id>/cmd/add_package?name=<name>
+        &version=<version>&repository_id=<repo_id>
 
             Arguments:
 
@@ -348,7 +389,7 @@ class StudioAPI:
         data = urllib.urlencode({'name':name, 'version':version,
             'repository_id':repository_id})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def remove_appliance_software_package(self, id, name):
         """POST /api/v1/user/appliances/<id>/cmd/remove_package?name=<name>
@@ -363,10 +404,11 @@ class StudioAPI:
         url = self.api_addr+'/user/appliances/%s/cmd/remove_package' % id
         data = urllib.urlencode({"name":name})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def add_appliance_software_pattern(self, id, name, version='', repository_id=''):
-        """POST /api/v1/user/appliances/<id>/cmd/add_pattern?name=<name>&version=<version>&repository_id=<repo_id>
+        """POST /api/v1/user/appliances/<id>/cmd/add_pattern?name=<name>
+        &version=<version>&repository_id=<repo_id>
 
             Arguments:
 
@@ -381,7 +423,7 @@ class StudioAPI:
         data = urllib.urlencode({'name':name, 'version':version,
             'repository_id':repository_id})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def remove_appliance_software_pattern(self, id, name):
         """POST /api/v1/user/appliances/<id>/cmd/remove_pattern?name=<name>
@@ -396,7 +438,7 @@ class StudioAPI:
         url = self.api_addr+'/user/appliances/%s/cmd/remove_pattern' % id
         data = urllib.urlencode({'name':name})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def ban_appliance_software_package(self, id, name):
         """POST /api/v1/user/appliances/<id>/cmd/ban_package?name=<name>
@@ -411,7 +453,7 @@ class StudioAPI:
         url = self.api_addr+'/user/appliances/%s/cmd/ban_package' % id
         data = urllib.urlencode({"name":name})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def unban_appliance_software_package(self, id, name):
         """POST /api/v1/user/appliances/<id>/cmd/unban_package?name=<name>
@@ -426,7 +468,7 @@ class StudioAPI:
         url = self.api_addr+'/user/appliances/%s/cmd/unban_package' % id
         data = urllib.urlencode({"name":name})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def search_appliance_software(self, id, q, all_fields=False, all_repos=False):
         """GET /api/v1/user/appliances/<id>/software/search?q=<search_string>&all_fields=<all_fields>&all_repos=<all_repos>
@@ -452,7 +494,7 @@ class StudioAPI:
             'all_repos':all_repos})
         url = self.api_addr+'/user/appliances/%s/software/search?%s' % (id, query)
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     #########################################################################
     # Image files
@@ -471,11 +513,11 @@ class StudioAPI:
         query = urllib.urlencode({'build_id':build_id, 'path':path})
         url = self.api_addr+'/user/appliances/%s/image_files?%s' % (id, query)
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     ############################################################################
     # GPG Keys
-    #############################################################################
+    ############################################################################
     def get_appliance_gpg_keys(self, id):
         """GET /api/v1/user/appliances/<id>/gpg_keys
 
@@ -487,7 +529,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/appliances/%s/gpg_keys' % id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_appliance_gpg_key(self, id, key_id):
         """GET /api/v1/user/appliances/<id>/gpg_keys/<key_id>
@@ -501,7 +543,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/appliances/%s/gpg_keys/%s' % (id, key_id)
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def upload_appliance_gpg_key(self, id, name, target, key='', key_file=None):
         """POST /api/v1/user/appliances/<id>/gpg_keys?name=<name>&target=<target>&key=<the_key>
@@ -532,7 +574,7 @@ class StudioAPI:
             raise ValueError, "no key or key_file specified"
 
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def delete_appliance_gpg_key(self, id, key_id):
         """DELETE /api/v1/user/appliances/<id>/gpg_keys/<key_id>
@@ -546,7 +588,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/appliances/%s/gpg_keys/%s' % (id, key_id)
         req = HTTPDeleteRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     ########################################################################
     # Overlay files
@@ -562,42 +604,34 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/files?%s' % urllib.urlencode({'appliance_id':id})
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
-    def add_appliance_overlay_file(self, id, overlay_file=None, filename='',
-        path='', owner='', group='', permissions='', enabled='', file_url=''):
-        """POST /api/v1/user/files?appliance_id=<id>&filename=<name>&path=<path>&owner=<owner>&group=<group>&permissions=<perms>&enabled=<enabled>&url=<url>
+    def upload_appliance_overlay_file(self, appliance_id, overlay_file=None,
+        filename='', path='', owner='', group='', permissions='', enabled='',
+        file_url=''):
+        """POST /api/v1/user/files?appliance_id=<id>&filename=<name>&path=<path>
+        &owner=<owner>&group=<group>&permissions=<perms>&enabled=<enabled>
+        &url=<url>
 
             Arguments:
 
                 appliance_id - Id of the appliance.
+
+                mutually exclusive (one or the other, not both):
                 overlay_file - file object to upload
-                filename (optional) - The name of the file in the filesystem.
-                path (optional) - The path where the file will be stored.
-                owner (optional) - The owner of the file.
-                group (optional) - The group of the file.
-                permissions (optional) - The permissions of the file.
-                enabled (optional) - Used to enable/disable this file for the
-                                     builds.
-                file_url (optional) - The url of the file to add from the internet
-                                 (HTTP and FTP are supported) when using the web
-                                 upload method
+                file_url - url of the file to add from the internet (HTTP and
+                           FTP are supported)
 
-            Adds a file to the appliance with id id.
-            Files can either be uploaded in the body of the POST request or from
-            a URL in the web:
-
-            With direct uploads the file is expected to be wrapped as with
-            form-based file uploads in HTML (RFC 1867) in the body of the POST
-            request as the file parameter.
-
-            For Uploads from the web you have to provide the url parameter.
-
-            Optionally, one or more metadata settings can be specified. If those
-            are left out, they can also be change later (see below).
+                optional arguments:                                                                                  
+                filename - The name of the file in the filesystem.
+                path     - The path where the file will be stored.
+                owner    - The owner of the file.
+                group    - The group of the file.
+                permissions - The permissions of the file.
+                enabled  - Used to enable/disable this file for the builds.
         """
-        if overlay_file and fileurl:
-            raise ValueError, "use overlay_file or fileurl, not both"
+        if overlay_file and file_url:
+            raise ValueError, "use overlay_file or file_url, not both"
         
         data = {'appliance_id':id,
             'filename':filename,
@@ -608,15 +642,15 @@ class StudioAPI:
             'enabled':enabled}
 
         if file_url:
-            data['url'] = fileurl
+            data['url'] = file_url
         elif overlay_file:
             data['file'] = overlay_file
-        else
-            raise ValueError, "fileurl or overlay_file was invalid"
+        else:
+            raise ValueError, "file_url or overlay_file was invalid"
 
         url = self.api_addr+'/user/files'
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_overlay_file(self, file_id):
         """GET /api/v1/user/files/<file_id>/data
@@ -629,9 +663,9 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/files/%s/data' % file_id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
-    def add_overlay_file(self, file_id, input_file):
+    def replace_overlay_file(self, file_id, input_file):
         """PUT /api/v1/user/files/<file_id>/data
 
             Arguments:
@@ -646,7 +680,7 @@ class StudioAPI:
         url = self.api_addr + 'user/files/%s/data' % file_id
         data = { 'file': input_file }
         req = HTTPPutRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_overlay_file_metadata(self, id):
         """GET /api/v1/user/files/<file_id>
@@ -659,22 +693,27 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/files/%s' % id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
-    def add_overlay_file_metadata(self, file_id, xml_file):
+    def add_overlay_file_metadata(self, file_id, xml_root):
         """PUT /api/v1/user/files/<file_id>
 
             Arguments:
 
                 file_id - Id of the file.
-                xml_file - xml metadata to associate to file
+                xml_root - root node of repositories xml (ET.Element)
 
             Writes the meta data of the file with id file_id.
         """
-        data = {'file':xml_file}
+        if isinstance(xml_root, ET.Element):
+            xml_string = ET.tostring(xml_root)
+        else:
+            raise ValueError, "expecting ET.Element (e.g. xml.etree.Element)"
+
+        data = {'file': urllib2.StringIO(xml_string)}
         url = self.api_addr+'/user/files/%s/data' % file_id
         req = HTTPPutRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def delete_overlay_file(self, id):
         """DELETE /api/v1/user/files/<file_id>
@@ -687,7 +726,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/files/%s' % id
         req = HTTPDeleteRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     #####################################################################
     # Running builds
@@ -704,7 +743,7 @@ class StudioAPI:
         query = urllib.urlencode({'appliance_id':appliance_id})
         url = self.api_addr+'/user/running_builds?%s' % query
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_build_status(self, build_id):
         """GET /api/v1/user/running_builds/<build_id>
@@ -717,7 +756,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/running_builds/%s' % build_id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def add_build(self, appliance_id, force='', version='', image_type=''):
         """POST /api/v1/user/running_builds?appliance_id=<id>&force=<force>&version=<version>&image_type=<type>&multi=<multi>
@@ -747,7 +786,7 @@ class StudioAPI:
         data = urllib.urlencode({'appliance_id':id, 'force':force,
             'version':version, 'image_type':image_type})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def cancel_build(self, build_id):
         """DELETE /api/v1/user/running_builds/<build_id>
@@ -760,7 +799,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/running_builds/%s' % build_id
         req = HTTPDeleteRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     ###############################################################
     # Finished builds
@@ -776,7 +815,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/builds?%s' % urllib.urlencode({"appliance_id":id})
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_build_info(self, build_id):
         """GET /api/v1/user/builds/<build_id>
@@ -789,7 +828,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/builds/%s' % build_id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def delete_build(self, build_id):
         """DELETE /api/v1/user/builds/<build_id>
@@ -802,7 +841,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/builds/%s' % build_id
         req = HTTPDeleteRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     ##################################################################
     # RPM Uploads
@@ -820,7 +859,7 @@ class StudioAPI:
         query = urllib.urlencode({'base_system':base_system})
         url = self.api_addr+'/user/rpms?%s' % query
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_rpm_info(self, rpm_id):
         """GET /api/v1/user/rpms/<rpm_id>
@@ -833,7 +872,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/rpms/%s' % rpm_id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_rpm(self, rpm_id):
         """GET /api/v1/user/rpms/<rpm_id>/data
@@ -846,7 +885,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/rpms/%s/data' % rpm_id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def upload_rpm(self, base_system, rpm_file):
         """POST /api/v1/user/rpms?base_system=<base>
@@ -864,7 +903,7 @@ class StudioAPI:
         url = self.api_addr+'/user/rpms'
         data = { 'base_system':base_system, 'file':rpm_file }
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(url, data).read()
+        return self._opener(url, data)
 
     def update_rpm(self, rpm_id, rpm_file):
         """PUT /api/v1/user/rpms/<rpm_id>
@@ -881,7 +920,7 @@ class StudioAPI:
         url = self.api_addr+'/user/rpms/%s' % rpm_id
         data = { 'file':rpm_file }
         req = HTTPPutRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def delete_rpm(self, rpm_id):
         """DELETE /api/v1/user/rpms/<rpm_id>
@@ -895,7 +934,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/rpms/%s' % rpm_id
         req = HTTPDeleteRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     #################################################################
     # Repositories
@@ -924,7 +963,7 @@ class StudioAPI:
         query = urllib.urlencode(criteria)
         url = self.api_addr+'/user/repositories?%s' % query
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def import_repository(self, repo_url, name):
         """POST /api/v1/user/repositories?url=<url>&name=<name>
@@ -934,12 +973,13 @@ class StudioAPI:
                 url - Base url of the repository.
                 name - Name for the repository.
 
-            Imports a new repository into Studio. Returns the metadata for the created repository.
+            Imports a new repository into Studio. Returns the metadata for the
+            created repository.
         """
         url = self.api_addr+'/user/repositories'
         data = urllib.urlencode({'url':repo_url, 'name':name})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def get_repository_info(self, repo_id):
         """GET /api/v1/user/repositories/<id>
@@ -952,7 +992,7 @@ class StudioAPI:
         """
         url = self.api_addr+'/user/repositories/%s' % repo_id
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     ####################################################################
     # Testdrives
@@ -964,7 +1004,7 @@ class StudioAPI:
         """
         url = self.api_addr + '/user/testdrives'
         req = HTTPGetRequest(url)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
     def start_testdrive(self, build_id):
         """POST /api/v1/user/testdrives?build_id=<build_id>
@@ -982,34 +1022,63 @@ class StudioAPI:
         url = self.api_addr + '/user/testdrives'
         data = urllib.urlencode({'build_id':build_id})
         req = HTTPPostRequest(url, data)
-        return urllib2.urlopen(req)
+        return self._opener(req)
 
 
 class StudioUtils:
     @staticmethod
-    def get_appliance_fragment():
-        template = """
-
+    def software_xml(appliance_id, packages=[], patterns=[]):
         """
+        arguments:
+            appliance_id - the appliance to update
+            packages - a list of packages to add
+            patterns - a list of patterns to add
+
+        if packages need to be versioned, you need to amend the returned tree
+        """
+        root = ET.Element("software", type="array", appliance_id=appliance_id)
+        for p in packages:
+            ET.SubElement(root, "package").text = p
+        for p in patterns:
+            ET.SubElement(root, "patterns").text = p
+        return root
+            
+    @staticmethod
+    def rpm_xml(id, filename, size, archive, base_system, checksum):
+        """
+        arguments
+            ***
+        default to md5 checksum type - amend fragment if this is wrong!
+        """
+        tagdict = {'id':id, 'filename':filename, 'size':size, 'archive':archive,
+            'base_system':base_system, 'checksum':checksum}
+        tags = filter(lambda k: tagdict[k], tagdict)
+        root = ET.Element("rpm")
+        for tag in tags:
+            ET.SubElement(root, tag).text = tagdict[tag]
+        root.find("checksum").attrib['type'] = 'md5'
+        return root
 
     @staticmethod
-    def get_build_fragment():
-        template = """
-        
+    def gallery_appliance_xml():
         """
+        returns outline template - you HAVE to amend the return value!
+        - you need to add valid accounts
+        - you need to add valid configuration
+        - you need to add formats
 
-    @staticmethod
-    def get_repository_fragment():
-        template = """
-        
+        **** this function does nothing except return a suitable empty xml
+        to populate
         """
-                
-    @staticmethod
-    def get_file_metadata_fragment():
-        template = """
-        
-        """
-
+        root = ET.Element("gallery")
+        appliance = ET.SubElement(root, "appliance")
+        appliance_tags = ['id', 'name', 'version', 'release_notes', 'homepage',
+            'description', 'publisher', 'username', 'based_on', 'formats',
+            'configuration', 'keyboard_layout', 'language', 'timezone',
+            'network', 'firewall', 'security']
+        for tag in appliance_tags:
+            ET.SubElement(appliance, tag)
+        return root
 
 
 ####
@@ -1034,11 +1103,6 @@ class StudioUtils:
 
 import mimetools, mimetypes
 import os, stat
-
-try:
-	from cStringIO import StringIO
-except ImportError:
-	from StringIO import StringIO
 
 # Controls how sequences are uncoded. If true, elements may be given multiple values by
 #  assigning a sequence.
@@ -1107,15 +1171,13 @@ Example:
         for(key, value) in vars:
             buf.write('--%s\r\n' % boundary)
             buf.write('Content-Disposition: form-data; name="%s"' % key)
-            buf.write('\r\n\r\n' + value + '\r\n')
+            buf.write('\r\n\r\n%s\r\n' % value)
         for(key, fd) in files:
-            #file_size = os.fstat(fd.fileno())[stat.ST_SIZE]
             filename = fd.name.split('/')[-1]
             contenttype = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
             buf.write('--%s\r\n' % boundary)
             buf.write('Content-Disposition: form-data; name="%s"; filename="%s"\r\n' % (key, filename))
             buf.write('Content-Type: %s\r\n' % contenttype)
-            # buffer += 'Content-Length: %s\r\n' % file_size
             fd.seek(0)
             buf.write('\r\n' + fd.read() + '\r\n')
         buf.write('--' + boundary + '--\r\n\r\n')

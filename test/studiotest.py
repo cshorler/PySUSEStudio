@@ -27,6 +27,13 @@ class StudioTest(mox.MoxTestBase):
         self.studio.get_api_key()
         self.mox.VerifyAll()
 
+    def test_opener(self):
+        f = urllib2.urlopen('file://%s/repositories.xml' % self.resdir)
+        self.mox.StubOutWithMock(urllib2, 'urlopen')
+        self.mox.ReplayAll()
+        
+        
+        self.mox.VerifyAll()
     #def test_get_account(self):
     #def test_get_api_version(self):
     #def test_get_template_sets(self):
