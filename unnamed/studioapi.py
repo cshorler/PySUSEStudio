@@ -1,33 +1,57 @@
-#!/usr/bin/env python
-
+#!/usr/bin/env python3
+#
+#  Python Wrapper for SUSE Studio REST API
+#  Copyright (C) 2014  Christopher HORLER
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+#
 """
 This module works with XML - internally it uses etree, if lxml.etree is
 available, that is used - otherwise xml.etree.ElementTree is used.
 
 Basic Usage:
-import studioapi
+$ python3
 
-connection = studioapi.AuthConnection(username, password)
-studio = studioapi.StudioAPI(connection)
+>>> import studioapi
 
-studio.get_api_version()
+>>> connection = studioapi.AuthConnection(username, password)
+>>> studio = studioapi.StudioAPI(connection)
+
+>>> studio.get_api_version()
 
 """
 __all__ = ['AuthConnection', 'StudioAPI', 'StudioUtils']
-__license__ = 'GPL v.2 http://www.gnu.org/licenses/gpl.txt'
+__license__ = 'GPL-3, http://www.gnu.org/licenses/gpl.txt'
 __author__ = "Chris Horler <cshorler@googlemail.com>"
-__version__ = '1.0-pre1'
+__version__ = '2.0'
 
 import sys
-import urllib
-import urllib2
-import urlparse
+
+import urllib.request
+from urllib.request import urlopen
+from urllib.parse import urljoin
 from contextlib import closing
 
-try:
-    from cStringIO import StringIO
-except ImportError:
-    from StringIO import StringIO
+import os.path
+import io
+import email.generator
+import email.policy
+from email.mime.text import MIMEText
+from email.mime.nonmultipart import MIMENonMultipart
+from email.mime.multipart import MIMEMultipart
+import mimetypes
 
 try:
     import lxml.etree as ET
@@ -35,38 +59,83 @@ except ImportError:
     import xml.etree.ElementTree as ET
 
 
-class HTTPPutRequest(urllib2.Request):
+class HTTPPutRequest(urllib.request.Request):
     def __init__(self, *args, **kwargs):
-        urllib2.Request.__init__(self, *args, **kwargs)
+        urllib.request.Request.__init__(self, *args, **kwargs)
     def get_method(self):
         return 'PUT'
 
-
-class HTTPDeleteRequest(urllib2.Request):
+class HTTPDeleteRequest(urllib.request.Request):
     def __init__(self, *args, **kwargs):
-        urllib2.Request.__init__(self, *args, **kwargs)
+        urllib.request.Request.__init__(self, *args, **kwargs)
     def get_method(self):
         return 'DELETE'
 
-
-class HTTPPostRequest(urllib2.Request):
+class HTTPPostRequest(urllib.request.Request):
     def __init__(self, *args, **kwargs):
-        urllib2.Request.__init__(self, *args, **kwargs)
+        urllib.request.Request.__init__(self, *args, **kwargs)
     def get_method(self):
         return 'POST'
 
-
-class HTTPGetRequest(urllib2.Request):
+class HTTPGetRequest(urllib.request.Request):
     def __init__(self, *args, **kwargs):
-        urllib2.Request.__init__(self, *args, **kwargs)
+        urllib.request.Request.__init__(self, *args, **kwargs)
     def get_method(self):
         return 'GET'
 
 
+class HTTPFormRequest(urllib.request.Request):
+    def __init__(self, url, mime_msg, *args, **kwargs):
+        if not isinstance(mime_msg, MIMEMultipart): raise TypeError
+        
+        mime_msg.policy = email.policy.HTTP
+        mime_msg.set_boundary(email.generator._make_boundary())
+        mime_msg._write_headers = lambda g: None
+
+        buf = io.BytesIO()
+        gen = email.generator.BytesGenerator(buf)
+        gen.flatten(mime_msg)
+        data = buf.getvalue()
+
+        urllib.request.Request.__init__(self, url, data, *args, **kwargs)
+        for h, v in mime_msg.items():
+            self.add_unredirected_header(h, v) 
+
+class HTTPPutFormRequest(HTTPFormRequest):
+    def __init__(self, url, mime_msg, *args, **kwargs):
+        HTTPFormRequest.__init__(self, url, mime_msg, *args, **kwargs)
+    def get_method(self):
+        return 'PUT'
+
+class HTTPPostFormRequest(HTTPFormRequest):
+    def __init__(self, url, mime_msg, *args, **kwargs):
+        HTTPFormRequest.__init__(self, url, mime_msg, *args, **kwargs)
+    def get_method(self):
+        return 'POST'
+
+class MIMEVar(MIMEText):
+    def __init__(self, _name, _value, _subtype='plain', _charset=None, **kwargs):
+        MIMEText.__init__(self, _value, _subtype, _charset)
+        self.add_header('Content-Disposition', 'form-data', name=_name, **kwargs)
+
+class MIMEFile(MIMENonMultipart):
+    def __init__(self, name, file_path, **kwargs):
+        contenttype = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
+        maintype, subtype = contenttype.split('/')
+        filename = os.path.basename(file_path)
+        #TODO: need to think about text encoding for text/*
+        MIMENonMultipart.__init__(self, maintype, subtype)
+        self.add_header('Content-Disposition', 'form-data', name=name, filename=filename)
+        if maintype != 'text': self.add_header('Content-Type-Encoding', 'binary')
+        with open(file_path, 'rb') as f:
+            self.set_payload(f.read())
+
+
+
 class BaseConnection:
     def __init__(self, host, api_path):
-        self.addr = urlparse.urljoin(host, api_path)
-        self.opener = urllib2.build_opener()
+        self.addr = urljoin(host, api_path)
+        self.opener = urllib.request.build_opener()
                 
     def api_addr(self):
         return self.addr
@@ -78,16 +147,14 @@ class BaseConnection:
 class AuthConnection(BaseConnection):
     """Wrapper for connection details and OpenerDirector
     """
-    def __init__(self, username, password, host='http://susestudio.com',
-        api_path='api/v1'):
+    def __init__(self, username, password, host='https://susestudio.com', api_path='api/v2'):
         BaseConnection.__init__(self, host, api_path)
 
-        auth_manager = urllib2.HTTPPasswordMgrWithDefaultRealm()
+        auth_manager = urllib.request.HTTPPasswordMgrWithDefaultRealm()
         auth_manager.add_password(None, host, username, password)
-        auth_handler = urllib2.HTTPBasicAuthHandler(auth_manager)
+        auth_handler = urllib.request.HTTPBasicAuthHandler(auth_manager)
         
-        self.opener = urllib2.build_opener(
-             urllib2.HTTPHandler(debuglevel=1), auth_handler)
+        self.opener = urllib.request.build_opener(urllib.request.HTTPSHandler(debuglevel=1), auth_handler)
 
 
 class StudioError(Exception):
@@ -103,38 +170,25 @@ class StudioAPI:
     """
     def __init__(self, studio_connection):
         self.opener = studio_connection.api_opener()
-        self.opener.add_handler(MultipartPostHandler())
         self.api_addr = studio_connection.api_addr()
-        urllib2.install_opener(self.opener)
+        urllib.request.install_opener(self.opener)
 
     def _opener(self, request, raw=False):
-        with closing(urllib2.urlopen(request)) as response:
+        with urlopen(request) as response:
             try:
                 if raw:
                     return response.read()
                 else:
                     return ET.parse(response).getroot()
-            except urllib2.HTTPError, e:
+            except urllib.error.HTTPError as e:
                 if e.code in [500,]: # TODO: list of HTTP Errors to wrap
-                    raise StudioError, "report error to the library maintainer"
+                    raise StudioError("report error to the library maintainer")
                 else:
                     raise
                 
     ###############################################################
     # GENERAL INFORMATION
     ###############################################################
-    def _get_api_key(self):
-        """GET /user/show_api_key
-
-        Not 100% sure on the usefulness of this function, so it's _private
-        
-        Returns an HTML page which contains the API key flagged as:
-        """
-        url_parts = urlparse.urlsplit(self.api_addr)
-        url = urlparse.urlunsplit(url_parts._replace(path='/user/show_api_key'))
-        req = HTTPGetRequest(url)
-        return self._opener(req, raw=True)
-
     def get_account(self):
         """GET /api/v1/user/account
 
@@ -216,8 +270,7 @@ class StudioAPI:
         i686 appliance will be created.
         """
         url = self.api_addr+'/user/appliances'
-        data = urllib.urlencode({'clone_from':clone_from, 'name':name,
-                                 'arch':arch})
+        data = urlencode({'clone_from':clone_from, 'name':name, 'arch':arch})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -265,7 +318,7 @@ class StudioAPI:
         if isinstance(xml_root, ET.Element):
             xml_string = ET.tostring(xml_root)
         else:
-            raise ValueError, "expecting ET.Element (e.g. xml.etree.Element)"
+            raise ValueError("expecting ET.Element (e.g. xml.etree.Element)")
 
         url = self.api_addr+'/user/appliances/%s/repositories' % appliance_id
         req = HTTPPutRequest(url=url, data=xml_string,
@@ -283,7 +336,7 @@ class StudioAPI:
             Add the specified repository to the appliance with id appliance_id.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/add_repository' % appliance_id
-        data = urllib.urlencode({"repo_id":repo_id})
+        data = urlencode({"repo_id":repo_id})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -298,7 +351,7 @@ class StudioAPI:
             Remove the specified repository from the appliance with id id.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/remove_repository' % id
-        data = urllib.urlencode({'repo_id':repo_id})
+        data = urlencode({'repo_id':repo_id})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -346,7 +399,7 @@ class StudioAPI:
         if isinstance(xml_root, ET.Element):
             xml_string = ET.tostring(xml_root)
         else:
-            raise ValueError, "expecting ET.Element (e.g. xml.etree.Element)"
+            raise ValueError("expecting ET.Element (e.g. xml.etree.Element)")
 
         url = self.api_addr+'/user/appliances/%s/software' % appliance_id
         req = HTTPPutRequest(url, data=xml_string,
@@ -367,7 +420,7 @@ class StudioAPI:
         build id. That makes it possible to retrieve the installed software
         for older builds.
         """
-        query = urllib.urlencode({'buildid':build_id})
+        query = urlencode({'buildid':build_id})
         url = self.api_addr+'/user/appliances/%s/installed?%s' % (id, query)
         req = HTTPGetRequest(url)
         return self._opener(req)
@@ -386,7 +439,7 @@ class StudioAPI:
             Add the specified package to the appliance with id id.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/add_package' % id
-        data = urllib.urlencode({'name':name, 'version':version,
+        data = urlencode({'name':name, 'version':version,
             'repository_id':repository_id})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
@@ -402,7 +455,7 @@ class StudioAPI:
             Remove the specified package from the appliance with id id.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/remove_package' % id
-        data = urllib.urlencode({"name":name})
+        data = urlencode({"name":name})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -420,8 +473,7 @@ class StudioAPI:
             Add the specified pattern to the appliance with id id.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/add_pattern' % id
-        data = urllib.urlencode({'name':name, 'version':version,
-            'repository_id':repository_id})
+        data = urlencode({'name':name, 'version':version, 'repository_id':repository_id})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -436,7 +488,7 @@ class StudioAPI:
             Remove the specified pattern from the appliance with id id.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/remove_pattern' % id
-        data = urllib.urlencode({'name':name})
+        data = urlencode({'name':name})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -451,7 +503,7 @@ class StudioAPI:
             Ban a package from the appliance with id id.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/ban_package' % id
-        data = urllib.urlencode({"name":name})
+        data = urlencode({"name":name})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -466,12 +518,13 @@ class StudioAPI:
             Unban a package from the appliance with id id.
         """
         url = self.api_addr+'/user/appliances/%s/cmd/unban_package' % id
-        data = urllib.urlencode({"name":name})
+        data = urlencode({"name":name})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
     def search_appliance_software(self, id, q, all_fields=False, all_repos=False):
-        """GET /api/v1/user/appliances/<id>/software/search?q=<search_string>&all_fields=<all_fields>&all_repos=<all_repos>
+        """GET 
+/api/v1/user/appliances/<id>/software/search?q=<search_string>&all_fields=<all_fields>&all_repos=<all_repos>
 
             Arguments:
 
@@ -490,7 +543,7 @@ class StudioAPI:
             repositories of this appliances. If you want to search in all
             repositories set the all_repos parameter to true.
         """
-        query = urllib.urlencode({'q':q, 'all_fields':all_fields,
+        query = urlencode({'q':q, 'all_fields':all_fields,
             'all_repos':all_repos})
         url = self.api_addr+'/user/appliances/%s/software/search?%s' % (id, query)
         req = HTTPGetRequest(url)
@@ -510,7 +563,7 @@ class StudioAPI:
 
             Returns the file with the given path from an image.
         """
-        query = urllib.urlencode({'build_id':build_id, 'path':path})
+        query = urlencode({'build_id':build_id, 'path':path})
         url = self.api_addr+'/user/appliances/%s/image_files?%s' % (id, query)
         req = HTTPGetRequest(url)
         return self._opener(req)
@@ -545,7 +598,7 @@ class StudioAPI:
         req = HTTPGetRequest(url)
         return self._opener(req)
 
-    def upload_appliance_gpg_key(self, id, name, target, key='', key_file=None):
+    def upload_appliance_gpg_key(self, id, name, target, key='', key_path=''):
         """POST /api/v1/user/appliances/<id>/gpg_keys?name=<name>&target=<target>&key=<the_key>
 
             Arguments:
@@ -563,17 +616,20 @@ class StudioAPI:
             target parameter.
         """
         if key and key_file:
-            raise ValueError, "only use one of key or key_file, not both"
+            raise ValueError("only use one of key or key_file, not both")
+        elif not key and not key_file:
+            raise ValueError("no key or key_file specified")
         
         url = self.api_addr+'/user/appliances/%s/gpg_keys' % id
         if key:
-            data = urllib.urlencode({'name':name, 'target':target, 'key':key})
-        elif key_file:
-            data = {'name':name, 'target':target, 'file':key_file }
+            data = urlencode({'name':name, 'target':target, 'key':key})
+            req = HTTPPostRequest(url, data)
         else:
-            raise ValueError, "no key or key_file specified"
-
-        req = HTTPPostRequest(url, data)
+            msg = MIMEMultipart('form-data')
+            msg.attach(MIMEVar('name', name))
+            msg.attach(MIMEVar('target', target))
+            msg.attach(MIMEFile('file', key_path))
+            req = HTTPPostFormRequest(url, msg)
         return self._opener(req)
 
     def delete_appliance_gpg_key(self, id, key_id):
@@ -602,7 +658,7 @@ class StudioAPI:
 
             List all overlay files of appliance with id id.
         """
-        url = self.api_addr+'/user/files?%s' % urllib.urlencode({'appliance_id':id})
+        url = self.api_addr+'/user/files?%s' % urlencode({'appliance_id':id})
         req = HTTPGetRequest(url)
         return self._opener(req)
 
@@ -631,7 +687,7 @@ class StudioAPI:
                 enabled  - Used to enable/disable this file for the builds.
         """
         if overlay_file and file_url:
-            raise ValueError, "use overlay_file or file_url, not both"
+            raise ValueError("use overlay_file or file_url, not both")
         
         data = {'appliance_id':id,
             'filename':filename,
@@ -646,7 +702,7 @@ class StudioAPI:
         elif overlay_file:
             data['file'] = overlay_file
         else:
-            raise ValueError, "file_url or overlay_file was invalid"
+            raise ValueError("file_url or overlay_file was invalid")
 
         url = self.api_addr+'/user/files'
         req = HTTPPostRequest(url, data)
@@ -665,7 +721,7 @@ class StudioAPI:
         req = HTTPGetRequest(url)
         return self._opener(req)
 
-    def replace_overlay_file(self, file_id, input_file):
+    def replace_overlay_file(self, file_id, local_path):
         """PUT /api/v1/user/files/<file_id>/data
 
             Arguments:
@@ -678,8 +734,9 @@ class StudioAPI:
             parameter.
         """
         url = self.api_addr + 'user/files/%s/data' % file_id
-        data = { 'file': input_file }
-        req = HTTPPutRequest(url, data)
+        msg = MIMEMultipart('form-data')
+        msg.attach(MIMEFile('file', local_path))
+        req = HTTPPutFormRequest(url, msg)
         return self._opener(req)
 
     def get_overlay_file_metadata(self, id):
@@ -708,7 +765,7 @@ class StudioAPI:
         if isinstance(xml_root, ET.Element):
             xml_string = ET.tostring(xml_root)
         else:
-            raise ValueError, "expecting ET.Element (e.g. xml.etree.Element)"
+            raise ValueError("expecting ET.Element (e.g. xml.etree.Element)")
 
         data = {'file': urllib2.StringIO(xml_string)}
         url = self.api_addr+'/user/files/%s/data' % file_id
@@ -740,7 +797,7 @@ class StudioAPI:
 
             List all running builds for the appliance with id id.
         """
-        query = urllib.urlencode({'appliance_id':appliance_id})
+        query = urlencode({'appliance_id':appliance_id})
         url = self.api_addr+'/user/running_builds?%s' % query
         req = HTTPGetRequest(url)
         return self._opener(req)
@@ -759,7 +816,8 @@ class StudioAPI:
         return self._opener(req)
 
     def add_build(self, appliance_id, force='', version='', image_type=''):
-        """POST /api/v1/user/running_builds?appliance_id=<id>&force=<force>&version=<version>&image_type=<type>&multi=<multi>
+        """POST 
+/api/v1/user/running_builds?appliance_id=<id>&force=<force>&version=<version>&image_type=<type>&multi=<multi>
 
             Arguments:
 
@@ -783,7 +841,7 @@ class StudioAPI:
             trigger the other formats with the multi parameter set to true.
         """
         url = self.api_addr+'/user/running_builds'
-        data = urllib.urlencode({'appliance_id':id, 'force':force,
+        data = urlencode({'appliance_id':id, 'force':force,
             'version':version, 'image_type':image_type})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
@@ -813,7 +871,7 @@ class StudioAPI:
 
             List all completed builds for the appliance with id id.
         """
-        url = self.api_addr+'/user/builds?%s' % urllib.urlencode({"appliance_id":id})
+        url = self.api_addr+'/user/builds?%s' % urlencode({"appliance_id":id})
         req = HTTPGetRequest(url)
         return self._opener(req)
 
@@ -856,7 +914,7 @@ class StudioAPI:
 
             List all uploaded RPMs for the base system base.
         """
-        query = urllib.urlencode({'base_system':base_system})
+        query = urlencode({'base_system':base_system})
         url = self.api_addr+'/user/rpms?%s' % query
         req = HTTPGetRequest(url)
         return self._opener(req)
@@ -887,7 +945,7 @@ class StudioAPI:
         req = HTTPGetRequest(url)
         return self._opener(req)
 
-    def upload_rpm(self, base_system, rpm_file):
+    def upload_rpm(self, base_system, rpm_path):
         """POST /api/v1/user/rpms?base_system=<base>
 
             Arguments:
@@ -901,11 +959,13 @@ class StudioAPI:
             file parameter.
         """
         url = self.api_addr+'/user/rpms'
-        data = { 'base_system':base_system, 'file':rpm_file }
-        req = HTTPPostRequest(url, data)
-        return self._opener(url, data)
+        msg = MIMEMultipart('form-data')
+        msg.attach(MIMEVar('base_system', base_system))
+        msg.attach(MIMEFile('file', rpm_path))
+        req = HTTPPostFormRequest(url, msg)
+        return self._opener(req)
 
-    def update_rpm(self, rpm_id, rpm_file):
+    def update_rpm(self, rpm_id, rpm_path):
         """PUT /api/v1/user/rpms/<rpm_id>
 
             Arguments:
@@ -918,8 +978,9 @@ class StudioAPI:
             parameter.
         """
         url = self.api_addr+'/user/rpms/%s' % rpm_id
-        data = { 'file':rpm_file }
-        req = HTTPPutRequest(url, data)
+        msg = MIMEMultipart('form-data')
+        msg.attach(MIMEFile('file', rpm_path))
+        req = HTTPPutFormRequest(url, msg)
         return self._opener(req)
 
     def delete_rpm(self, rpm_id):
@@ -960,7 +1021,7 @@ class StudioAPI:
         # FIXME: the search string / filter seems to cause all types of errors
         #if search_string:
         #    criteria.append(('filter', search_string))
-        query = urllib.urlencode(criteria)
+        query = urlencode(criteria)
         url = self.api_addr+'/user/repositories?%s' % query
         req = HTTPGetRequest(url)
         return self._opener(req)
@@ -977,7 +1038,7 @@ class StudioAPI:
             created repository.
         """
         url = self.api_addr+'/user/repositories'
-        data = urllib.urlencode({'url':repo_url, 'name':name})
+        data = urlencode({'url':repo_url, 'name':name})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -1020,7 +1081,7 @@ class StudioAPI:
             connected after 60 seconds.
         """
         url = self.api_addr + '/user/testdrives'
-        data = urllib.urlencode({'build_id':build_id})
+        data = urlencode({'build_id':build_id})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
 
@@ -1080,108 +1141,3 @@ class StudioUtils:
             ET.SubElement(appliance, tag)
         return root
 
-
-####
-# 02/2006 Will Holcomb <wholcomb@gmail.com>
-# 
-# This library is free software; you can redistribute it and/or
-# modify it under the terms of the GNU Lesser General Public
-# License as published by the Free Software Foundation; either
-# version 2.1 of the License, or (at your option) any later version.
-# 
-# This library is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-# Lesser General Public License for more details.
-#
-# 7/26/07 Slightly modified by Brian Schneider  
-# in order to support unicode files ( multipart_encode function )
-#
-# 02 Jan 2012 Chris Horler
-#  - minor modifications
-# 
-
-import mimetools, mimetypes
-import os, stat
-
-# Controls how sequences are uncoded. If true, elements may be given multiple values by
-#  assigning a sequence.
-doseq = 1
-
-class MultipartPostHandler(urllib2.BaseHandler):
-    """MultipartPostHandler(urllib2.BaseHandler)
-
-Usage:
-  Enables the use of multipart/form-data for posting forms
-
-Inspirations:
-  Upload files in python:
-    http://aspn.activestate.com/ASPN/Cookbook/Python/Recipe/146306
-  urllib2_file:
-    Fabien Seisen: <fabien@seisen.org>
-
-Example:
-  import MultipartPostHandler, urllib2, cookielib
-
-  cookies = cookielib.CookieJar()
-  opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookies),
-                                MultipartPostHandler.MultipartPostHandler)
-  params = { "username" : "bob", "password" : "riviera",
-             "file" : open("filename", "rb") }
-  opener.open("http://wwww.bobsite.com/upload/", params)
-    """
-    handler_order = urllib2.HTTPHandler.handler_order - 10 # needs to run first
-
-    def http_request(self, request):
-        data = request.get_data()
-        if data and not isinstance(data, str):
-            v_files = []
-            v_vars = []
-            try:
-                for (key, value) in data.items():
-                    if isinstance(value, file):
-                        v_files.append((key, value))
-                    else:
-                        v_vars.append((key, value))
-            except TypeError:
-                systype, value, traceback = sys.exc_info()
-                raise TypeError, "not a valid non-string sequence or mapping object", traceback
-
-            if len(v_files) == 0:
-                data = urllib.urlencode(v_vars, doseq)
-            else:
-                boundary, data = self.multipart_encode(v_vars, v_files)
-
-                contenttype = 'multipart/form-data; boundary=%s' % boundary
-                if(request.has_header('Content-Type')
-                    and request.get_header('Content-Type').find('multipart/form-data') != 0):
-                    print "Replacing %s with %s" % (request.get_header('content-type'), 'multipart/form-data')
-                request.add_unredirected_header('Content-Type', contenttype)
-
-            request.add_data(data)
-
-        return request
-
-    @staticmethod
-    def multipart_encode(vars, files, boundary = None, buf = None):
-        if not boundary:
-            boundary = mimetools.choose_boundary()
-        if not buf:
-            buf = StringIO()
-        for(key, value) in vars:
-            buf.write('--%s\r\n' % boundary)
-            buf.write('Content-Disposition: form-data; name="%s"' % key)
-            buf.write('\r\n\r\n%s\r\n' % value)
-        for(key, fd) in files:
-            filename = fd.name.split('/')[-1]
-            contenttype = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
-            buf.write('--%s\r\n' % boundary)
-            buf.write('Content-Disposition: form-data; name="%s"; filename="%s"\r\n' % (key, filename))
-            buf.write('Content-Type: %s\r\n' % contenttype)
-            fd.seek(0)
-            buf.write('\r\n' + fd.read() + '\r\n')
-        buf.write('--' + boundary + '--\r\n\r\n')
-        buf = buf.getvalue()
-        return boundary, buf
-
-    https_request = http_request
