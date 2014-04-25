@@ -41,7 +41,7 @@ import sys
 
 import urllib.request
 from urllib.request import urlopen
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode
 from contextlib import closing
 
 import os.path
@@ -1084,6 +1084,34 @@ class StudioAPI:
         data = urlencode({'build_id':build_id})
         req = HTTPPostRequest(url, data)
         return self._opener(req)
+
+    ####################################################################
+    # Gallery
+    ####################################################################
+    def __gallery_search(self, keyword, username, page_number, results_per_page):
+        if keyword:
+            query = urlencode({'search': keyword, 'page': page_number, 'per_page': results_per_page})
+        elif username:
+            query = urlencode({'username': username, 'page': page_number, 'per_page': results_per_page})
+        else:
+            raise ValueError
+
+        url = self.api_addr + '/user/gallery/appliances?%s' % query
+        req = HTTPGetRequest(url)
+        return self._opener(req)
+
+    def gallery_latest_search(self, page_number=1, results_per_page=10):
+        return self.__gallery_search('latest', None, page_number, results_per_page)
+
+    def gallery_popular_search(self, page_number=1, results_per_page=10):
+        return self.__gallery_search('popular', None, page_number, results_per_page)
+
+    def gallery_keyword_search(self, keyword, page_number=1, results_per_page=10):
+        return self.__gallery_search(keyword, None, page_number, results_per_page)
+
+    def gallery_user_search(self, username, page_number=1, results_per_page=10):
+        return self.__gallery_search(None, username, page_number, results_per_page)
+
 
 
 class StudioUtils:
