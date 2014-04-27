@@ -1112,6 +1112,81 @@ class StudioAPI:
     def gallery_user_search(self, username, page_number=1, results_per_page=10):
         return self.__gallery_search(None, username, page_number, results_per_page)
 
+    def gallery_get_appliance(self, id, version=None):
+        if version:
+            url = self.api_addr + '/user/gallery/appliances/{0}/version/{1}'.format(id, version)
+        else:
+            url = self.api_addr + '/user/gallery/appliances/{0}'.format(id)
+        req = HTTPGetRequest(url)
+        return self._opener(req)
+
+    def gallery_publish_appliance(self, id, version, release_notes):
+        url = self.api_addr + '/user/gallery/appliances/{0}/version/{1}'.format(id, version)
+        req = HTTPPostRequest(url, release_notes)
+        return self._opener(req)
+
+    def gallery_modify_appliance(self, id, version, release_notes):
+        url = self.api_addr + '/user/gallery/appliances/{0}/version/{1}'.format(id, version)
+        req = HTTPPutRequest(url, release_notes)
+        return self._opener(req)
+
+    def gallery_unpublish_appliance(self, id, version):
+        url = self.api_addr + '/user/gallery/appliances/{0}/version/{1}'.format(id, version)
+        req = HTTPDeleteRequest(url)
+        return self._opener(req)
+
+    def gallery_get_appliance_rating(self, id):
+        url = self.api_addr + '/user/gallery/appliances/{0}/rating'.format(id)
+        req = HTTPGetRequest(url)
+        return self._opener(req)
+
+    def gallery_set_appliance_rating(self, id, rating):
+        query = urlencode({'rating': rating})
+        url = self.api_addr + '/user/gallery/appliances/{0}/rating?{1}'.format(id, query)
+        req = HTTPPostRequest(url)
+        return self._opener(req)
+
+    def gallery_get_appliance_software(self, id, version=None):
+        if version:
+            query = urlencode({'version': version})
+            url = self.api_addr + '/user/gallery/appliances/{0}/software?{1}'.format(id, query)
+        else:
+            url = self.api_addr + '/user/gallery/appliances/{0}/software'.format(id)
+        req = HTTPGetRequest(url)
+        return self._opener(req)
+
+    def gallery_get_appliance_logo(self, id):
+        url = self.api_addr + '/user/gallery/appliances/{0}/logo'.format(id)
+        req = HTTPGetRequest(url)
+        return self._opener(req)
+
+    def gallery_get_appliance_background(self, id):
+        url = self.api_addr + '/user/gallery/appliances/{0}/background'.format(id)
+        req = HTTPGetRequest(url)
+        return self._opener(req)
+
+    def gallery_start_testdrive(self, id, version=None):
+        if version:
+            query = urlencode({'version': version})
+            url = self.api_addr + '/user/gallery/appliances/{0}/testdrive?{1}'.format(id, query)
+        else:
+            url = self.api_addr + '/user/gallery/appliances/{0}/testdrive'.format(id)
+        req = HTTPPostRequest(url)
+        return self._opener(req)
+
+    def gallery_get_appliance_comments(self, id):
+        url = self.api_addr + '/user/gallery/appliances/{0}/comments'.format(id)
+        req = HTTPGetRequest(url)
+        return self._opener(req)
+
+    def gallery_add_appliance_comment(self, id, parent=None):
+        if parent:
+            query = urlencode({'parent': parent})
+            url = self.api_addr + '/user/gallery/appliances/{0}/comments?{1}'.format(id, query)
+        else:
+            url = self.api_addr + '/user/gallery/appliances/{0}/comments'.format(id)
+        req = HTTPPostRequest(url)
+        return self._opener(req)
 
 
 class StudioUtils:
